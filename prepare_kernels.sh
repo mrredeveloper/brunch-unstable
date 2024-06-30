@@ -1,6 +1,7 @@
 #!/bin/bash
 
-apply_patches() {
+apply_patches()
+{
     for patch_type in "base" "others" "chromeos" "all_devices" "surface_devices" "surface_go_devices" "surface_mwifiex_pcie_devices" "surface_np3_devices" "macbook"; do
         if [ -d "./kernel-patches/$1/$patch_type" ]; then
             for patch in ./kernel-patches/"$1/$patch_type"/*.patch; do
@@ -11,11 +12,11 @@ apply_patches() {
     done
 }
 
-make_config() {
+make_config()
+{
     sed -i -z 's@# Detect buggy gcc and clang, fixed in gcc-11 clang-14.\n\tdef_bool@# Detect buggy gcc and clang, fixed in gcc-11 clang-14.\n\tdef_bool $(success,echo 0)\n\t#def_bool@g' ./kernels/$1/init/Kconfig
     if [ "x$1" == "xchromebook-4.19" ]; then config_subfolder=""; else config_subfolder="/chromeos"; fi
     
-    # Kernel configuration steps
     case "$1" in
         6.6|6.1|5.15)
             sed '/CONFIG_ATH\|CONFIG_BUILD\|CONFIG_EXTRA_FIRMWARE\|CONFIG_DEBUG_INFO\|CONFIG_IWL\|CONFIG_LSM\|CONFIG_MODULE_COMPRESS/d' ./kernel-patches/flex_configs > "./kernels/$1/arch/x86/configs/chromeos_defconfig" || { echo "Kernel $1 configuration failed"; exit 1; }
@@ -44,46 +45,28 @@ make_config() {
     esac
 }
 
-download_and_patch_kernels() {
+download_and_patch_kernels()
+{
     # Find the ChromiumOS kernel remote path corresponding to the release
     kernel_remote_path="$(git ls-remote https://chromium.googlesource.com/chromiumos/third_party/kernel/ | grep "refs/heads/release-$chromeos_version" | head -1 | sed -e 's#.*\t##' -e 's#chromeos-.*##' | sort -u)chromeos-"
     [ ! "x$kernel_remote_path" == "x" ] || { echo "Remote path not found"; exit 1; }
+    echo "kernel_remote_path=$kernel_remote_path"
     
-    # Download and extract the different versions of the kernel
-    for version in $@; do
-        if [[ $version == chromebook* ]]; then
-            kernel="${version##*-}"
-            remote_path="$kernel_remote_path$kernel"
-            [ ! -d "./kernels/$version" ] && mkdir -p "./kernels/$version" && cd "./kernels/$version" && \
-            git init && \
-            git remote add origin https://chromium.googlesource.com/chromiumos/third_party/kernel/ && \
-            git fetch --depth=1 origin "$remote_path" && \
-            git checkout FETCH_HEAD && \
-            cd ../..
-        else
-            [ ! -d "./kernels/$version" ] && git clone --depth=1 --branch v$version https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git "./kernels/$version" || { echo "Kernel $version clone failed"; exit 1; }
-        fi
-    done
-    
-    # Apply patches
-    for version in $@; do
-        echo "Patching kernel $version..."
-        apply_patches $version
+    # Download kernels source
+    kernels="4.19 5.4 5.10 5.15 6.1 6.6"
+    for kernel in $kernels; do
+        echo "Downloading kernel $kernel"
+        [ ! -d "./kernels/$kernel" ] || { echo "Kernel $kernel is already downloaded"; continue; }
+        git clone --branch release-$chromeos_version https://chromium.googlesource.com/chromiumos/third_party/kernel ./kernels/$kernel --depth=1 || { echo "Kernel $kernel download failed"; exit 1; }
+        
+        # Apply patches
+        echo "Applying patches for kernel $kernel"
+        apply_patches $kernel || { echo "Patching kernel $kernel failed"; exit 1; }
+        
+        # Make configuration
+        echo "Making configuration for kernel $kernel"
+        make_config $kernel || { echo "Configuring kernel $kernel failed"; exit 1; }
     done
 }
 
-# Main script execution
-chromeos_version="15214.95.0" # Modify this to the appropriate ChromeOS release version
-
-# Define the kernel versions you need
-kernel_versions=("chromebook-4.19" "6.6" "6.1" "5.15")
-
-# Download and patch the kernels
-download_and_patch_kernels "${kernel_versions[@]}"
-
-# Make configurations for each kernel
-for version in "${kernel_versions[@]}"; do
-    make_config $version
-done
-
-echo "Kernel preparation complete."
+download_and_patch_kernels
